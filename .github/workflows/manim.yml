@@ -1,0 +1,61 @@
+name: Render Manim Scene
+on:
+  workflow_dispatch:
+    inputs:
+      script_url:
+        description: 'Direct URL to the Manim .py script'
+        required: true
+        default: 'https://gist.githubusercontent.com/user/id/raw/example.py'
+      quality:
+        description: 'Render Quality'
+        required: true
+        default: 'low'
+        type: choice
+        options:
+          - low
+          - high
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg build-essential libcairo2-dev libpango1.0-dev freeglut3-dev pkg-config
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Manim
+        run: |
+          pip install manim
+
+      - name: Download Script
+        run: |
+          curl -L "${{ github.event.inputs.script_url }}" -o scene_script.py
+
+      - name: Render Scene
+        run: |
+          # Determine quality flag
+          if [ "${{ github.event.inputs.quality }}" == "high" ]; then
+            FLAG="-qh"
+          else
+            FLAG="-ql"
+          fi
+          
+          # Render all scenes in the file
+          manim $FLAG scene_script.py
+
+      - name: Upload Rendered Video
+        uses: actions/upload-artifact@v4
+        with:
+          name: manim-render-${{ github.event.inputs.quality }}
+          path: media/videos/scene_script/
+          if-no-files-found: error
