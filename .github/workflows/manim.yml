@@ -8,53 +8,41 @@ on:
       quality:
         description: 'Render Quality'
         required: true
-        default: 'low'
+        default: 'l'
         type: choice
         options:
-          - low
-          - high
+          - l
+          - h
 
 jobs:
-  render:
+  render_scene:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      # 1. We check out the repo just to have a working directory
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg build-essential libcairo2-dev libpango1.0-dev freeglut3-dev pkg-config
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          # Removed the cache: 'pip' line to avoid the error
-
-      - name: Install Manim
-        run: |
-          pip install manim
-
-      - name: Download Script
+      # 2. Download the script from the URL
+      - name: Download Manim Script
         run: |
           curl -L "${{ github.event.inputs.script_url }}" -o scene_script.py
+          echo "File downloaded. Current directory content:"
+          ls -la
 
+      # 3. Use the Official Manim Docker container to render
+      # This bypasses all the manual installation steps
       - name: Render Scene
         run: |
-          # Determine quality flag
-          if [ "${{ github.event.inputs.quality }}" == "high" ]; then
-            FLAG="-qh"
-          else
-            FLAG="-ql"
-          fi
-          
-          # Render all scenes (-a) in the downloaded file
-          manim $FLAG -a scene_script.py
+          docker run --rm \
+            -v "$(pwd):/manim" \
+            manimcommunity/manim:stable \
+            manim -q${{ github.event.inputs.quality }} /manim/scene_script.py
 
-      - name: Upload Rendered Video
+      # 4. Upload the output
+      - name: Upload Video
         uses: actions/upload-artifact@v4
         with:
-          name: manim-render-${{ github.event.inputs.quality }}
+          name: manim-video-${{ github.event.inputs.quality }}
+          # Manim outputs to media/videos/scene_script/QUALITY_FOLDER/
           path: media/videos/scene_script/
           if-no-files-found: error
