@@ -18,31 +18,29 @@ jobs:
   render_scene:
     runs-on: ubuntu-latest
     steps:
-      # 1. We check out the repo just to have a working directory
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Download the script from the URL
       - name: Download Manim Script
         run: |
           curl -L "${{ github.event.inputs.script_url }}" -o scene_script.py
-          echo "File downloaded. Current directory content:"
-          ls -la
 
-      # 3. Use the Official Manim Docker container to render
-      # This bypasses all the manual installation steps
       - name: Render Scene
         run: |
+          # We run as root (-u root) so the container can create the 'media' folder
           docker run --rm \
+            -u root \
             -v "$(pwd):/manim" \
             manimcommunity/manim:stable \
             manim -q${{ github.event.inputs.quality }} /manim/scene_script.py
 
-      # 4. Upload the output
+      - name: Check output structure
+        run: ls -R media/
+
       - name: Upload Video
         uses: actions/upload-artifact@v4
         with:
           name: manim-video-${{ github.event.inputs.quality }}
-          # Manim outputs to media/videos/scene_script/QUALITY_FOLDER/
+          # This path captures all videos rendered from that script
           path: media/videos/scene_script/
           if-no-files-found: error
