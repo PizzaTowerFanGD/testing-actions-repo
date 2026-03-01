@@ -5,7 +5,6 @@ on:
       script_url:
         description: 'Direct URL to the Manim .py script'
         required: true
-        default: 'https://gist.githubusercontent.com/user/id/raw/example.py'
       quality:
         description: 'Render Quality'
         required: true
@@ -31,7 +30,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
+          # Removed the cache: 'pip' line to avoid the error
 
       - name: Install Manim
         run: |
@@ -50,8 +49,8 @@ jobs:
             FLAG="-ql"
           fi
           
-          # Render all scenes in the file
-          manim $FLAG scene_script.py
+          # Render all scenes (-a) in the downloaded file
+          manim $FLAG -a scene_script.py
 
       - name: Upload Rendered Video
         uses: actions/upload-artifact@v4
