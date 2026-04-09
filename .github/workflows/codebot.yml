@@ -39,27 +39,18 @@ jobs:
           const OWOT_WORLD = process.env.OWOT_WORLD || '';
           const NICKNAME = 'CDBot';
           const COMMAND_PREFIX = '!cd ';
-
           const wsUrl = OWOT_WORLD
             ? `wss://ourworldoftext.com/${OWOT_WORLD}/ws/`
             : 'wss://ourworldoftext.com/ws/';
 
-          async function sendChat(ws, message) {
-            const MAX_LEN = 256;
-            const chunks = [];
-            for (let i = 0; i < message.length; i += MAX_LEN) {
-              chunks.push(message.slice(i, i + MAX_LEN));
-            }
-            for (const chunk of chunks) {
-              ws.send(JSON.stringify({
-                kind: 'chat',
-                nickname: NICKNAME,
-                message: chunk,
-                location: 'page',
-                color: '#ff9900'
-              }));
-              await new Promise(r => setTimeout(r, 300));
-            }
+          function sendChat(ws, message) {
+            ws.send(JSON.stringify({
+              kind: 'chat',
+              nickname: NICKNAME,
+              message: message.slice(0, 440),
+              location: 'page',
+              color: '#ff9900'
+            }));
           }
 
           async function evalInBrowser(page, code) {
@@ -81,7 +72,6 @@ jobs:
             });
             const page = await browser.newPage();
 
-            console.log(`navigating to ${TARGET_URL}`);
             try {
               await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 30000 });
               console.log(`loaded: ${await page.title()}`);
@@ -91,10 +81,7 @@ jobs:
 
             const ws = new WebSocket(wsUrl);
 
-            ws.on('open', async () => {
-              console.log(`connected to owot: ${wsUrl}`);
-              await sendChat(ws, `CDBot online — attached to: ${TARGET_URL}`);
-            });
+            ws.on('open', () => sendChat(ws, `CDBot online — attached to: ${TARGET_URL}`));
 
             ws.on('message', async (raw) => {
               let data;
@@ -105,24 +92,13 @@ jobs:
               if (!msg.startsWith(COMMAND_PREFIX)) return;
               const code = msg.slice(COMMAND_PREFIX.length).trim();
               if (!code) return;
-              console.log(`[cmd from ${nick}]: ${code}`);
               const result = await evalInBrowser(page, code);
-              console.log(`[result]: ${result}`);
-              await sendChat(ws, `[${nick}] => ${result}`);
+              sendChat(ws, `[${nick}] => ${result}`);
             });
 
-            ws.on('close', () => {
-              console.log('ws closed');
-              browser.close();
-              process.exit(0);
-            });
-
+            ws.on('close', () => { browser.close(); process.exit(0); });
             ws.on('error', (e) => console.error(`ws error: ${e.message}`));
-
-            process.on('SIGTERM', async () => {
-              await browser.close();
-              process.exit(0);
-            });
+            process.on('SIGTERM', async () => { await browser.close(); process.exit(0); });
           }
 
           main().catch(e => { console.error(e); process.exit(1); });
