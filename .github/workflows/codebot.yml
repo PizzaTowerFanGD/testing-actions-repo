@@ -1,0 +1,129 @@
+name: OWOT Headless Browser Bot
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'URL for the headless browser to navigate to'
+        required: true
+        default: 'https://example.com'
+      owot_world:
+        description: 'OWOT world name (leave empty for main world)'
+        required: false
+        default: ''
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install puppeteer ws
+
+      - name: Run OWOT Browser Bot
+        env:
+          TARGET_URL: ${{ github.event.inputs.target_url }}
+          OWOT_WORLD: ${{ github.event.inputs.owot_world }}
+        run: |
+          node << 'EOF'
+          const puppeteer = require('puppeteer');
+          const WebSocket = require('ws');
+
+          const TARGET_URL = process.env.TARGET_URL || 'https://example.com';
+          const OWOT_WORLD = process.env.OWOT_WORLD || '';
+          const NICKNAME = 'CDBot';
+          const COMMAND_PREFIX = '!cd ';
+
+          const wsUrl = OWOT_WORLD
+            ? `wss://ourworldoftext.com/${OWOT_WORLD}/ws/`
+            : 'wss://ourworldoftext.com/ws/';
+
+          async function sendChat(ws, message) {
+            const MAX_LEN = 256;
+            const chunks = [];
+            for (let i = 0; i < message.length; i += MAX_LEN) {
+              chunks.push(message.slice(i, i + MAX_LEN));
+            }
+            for (const chunk of chunks) {
+              ws.send(JSON.stringify({
+                kind: 'chat',
+                nickname: NICKNAME,
+                message: chunk,
+                location: 'page',
+                color: '#ff9900'
+              }));
+              await new Promise(r => setTimeout(r, 300));
+            }
+          }
+
+          async function evalInBrowser(page, code) {
+            try {
+              const result = await page.evaluate(code);
+              const str = typeof result === 'object'
+                ? JSON.stringify(result, null, 2)
+                : String(result);
+              return str || '(no return value)';
+            } catch (e) {
+              return `ERROR: ${e.message}`;
+            }
+          }
+
+          async function main() {
+            const browser = await puppeteer.launch({
+              args: ['--no-sandbox', '--disable-setuid-sandbox'],
+              headless: 'new'
+            });
+            const page = await browser.newPage();
+
+            console.log(`navigating to ${TARGET_URL}`);
+            try {
+              await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+              console.log(`loaded: ${await page.title()}`);
+            } catch (e) {
+              console.warn(`page load issue: ${e.message} — continuing anyway`);
+            }
+
+            const ws = new WebSocket(wsUrl);
+
+            ws.on('open', async () => {
+              console.log(`connected to owot: ${wsUrl}`);
+              await sendChat(ws, `CDBot online — attached to: ${TARGET_URL}`);
+            });
+
+            ws.on('message', async (raw) => {
+              let data;
+              try { data = JSON.parse(raw.toString()); } catch { return; }
+              if (data.kind !== 'chat') return;
+              const msg = data.message || '';
+              const nick = data.nickname || 'anon';
+              if (!msg.startsWith(COMMAND_PREFIX)) return;
+              const code = msg.slice(COMMAND_PREFIX.length).trim();
+              if (!code) return;
+              console.log(`[cmd from ${nick}]: ${code}`);
+              const result = await evalInBrowser(page, code);
+              console.log(`[result]: ${result}`);
+              await sendChat(ws, `[${nick}] => ${result}`);
+            });
+
+            ws.on('close', () => {
+              console.log('ws closed');
+              browser.close();
+              process.exit(0);
+            });
+
+            ws.on('error', (e) => console.error(`ws error: ${e.message}`));
+
+            process.on('SIGTERM', async () => {
+              await browser.close();
+              process.exit(0);
+            });
+          }
+
+          main().catch(e => { console.error(e); process.exit(1); });
+          EOF
