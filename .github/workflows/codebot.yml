@@ -50,10 +50,24 @@ jobs:
           const TARGET_URL = process.env.TARGET_URL || 'https://example.com';
           const OWOT_WORLD = process.env.OWOT_WORLD || '';
           const NICKNAME = 'CDBot';
-          const COMMAND_PREFIX = '!cd ';
+          const PREFIX = '!cd ';
           const wsUrl = OWOT_WORLD
             ? `wss://ourworldoftext.com/${OWOT_WORLD}/ws/`
             : 'wss://ourworldoftext.com/ws/';
+
+          const HELP = {
+            'mouse': 'mouse (up|down|left|right) (px) — move cursor',
+            'click': 'click (left|right|middle)? — click at current pos',
+            'scroll': 'scroll (up|down) (px)',
+            'type': 'type (text) — type text',
+            'key': 'key (ctrl+)?(shift+)?(alt+)?key — press key combo',
+            'goto': 'goto (url) — navigate to url',
+            'eval': 'eval (js) — evaluate js in browser',
+            'pos': 'pos — report current mouse position',
+            'help': 'help (command)? — show help',
+          };
+
+          let mouseX = 640, mouseY = 360;
 
           function sendChat(ws, message) {
             ws.send(JSON.stringify({
@@ -65,16 +79,110 @@ jobs:
             }));
           }
 
-          async function evalInBrowser(page, code) {
-            try {
-              const result = await page.evaluate(code);
-              const str = typeof result === 'object'
-                ? JSON.stringify(result, null, 2)
-                : String(result);
-              return str || '(no return value)';
-            } catch (e) {
-              return `ERROR: ${e.message}`;
+          async function handleCommand(page, ws, nick, raw) {
+            const args = raw.trim().split(/\s+/);
+            const cmd = args[0]?.toLowerCase();
+
+            switch (cmd) {
+              case 'mouse': {
+                const dir = args[1]?.toLowerCase();
+                const px = parseInt(args[2]) || 50;
+                const deltas = { up:[0,-px], down:[0,px], left:[-px,0], right:[px,0] };
+                if (!deltas[dir]) return sendChat(ws, `unknown direction: ${dir}`);
+                mouseX = Math.max(0, Math.min(1280, mouseX + deltas[dir][0]));
+                mouseY = Math.max(0, Math.min(720, mouseY + deltas[dir][1]));
+                await page.mouse.move(mouseX, mouseY);
+                sendChat(ws, `mouse moved to ${mouseX},${mouseY}`);
+                break;
+              }
+
+              case 'click': {
+                const btn = ['left','right','middle'].includes(args[1]) ? args[1] : 'left';
+                await page.mouse.click(mouseX, mouseY, { button: btn });
+                sendChat(ws, `${btn} click at ${mouseX},${mouseY}`);
+                break;
+              }
+
+              case 'scroll': {
+                const dir = args[1]?.toLowerCase();
+                const px = parseInt(args[2]) || 100;
+                const dy = dir === 'up' ? -px : px;
+                await page.mouse.wheel({ deltaY: dy });
+                sendChat(ws, `scrolled ${dir} ${px}px`);
+                break;
+              }
+
+              case 'type': {
+                const text = args.slice(1).join(' ');
+                if (!text) return sendChat(ws, 'usage: type (text)');
+                await page.keyboard.type(text);
+                sendChat(ws, `typed: ${text.slice(0, 80)}`);
+                break;
+              }
+
+              case 'key': {
+                // parse e.g. ctrl+shift+a
+                const combo = args[1];
+                if (!combo) return sendChat(ws, 'usage: key (ctrl+)?(shift+)?(alt+)?key');
+                const parts = combo.toLowerCase().split('+');
+                const key = parts[parts.length - 1];
+                const mods = parts.slice(0, -1);
+                for (const m of mods) await page.keyboard.down(capitalize(m));
+                await page.keyboard.press(capitalize(key));
+                for (const m of mods) await page.keyboard.up(capitalize(m));
+                sendChat(ws, `pressed: ${combo}`);
+                break;
+              }
+
+              case 'goto': {
+                const url = args[1];
+                if (!url) return sendChat(ws, 'usage: goto (url)');
+                try {
+                  await page.goto(url, { waitUntil: 'networkidle2', timeout: 15000 });
+                  sendChat(ws, `navigated to: ${await page.title()}`);
+                } catch (e) {
+                  sendChat(ws, `goto failed: ${e.message.slice(0, 200)}`);
+                }
+                break;
+              }
+
+              case 'eval': {
+                const code = args.slice(1).join(' ');
+                if (!code) return sendChat(ws, 'usage: eval (js)');
+                try {
+                  const result = await page.evaluate(code);
+                  const str = typeof result === 'object'
+                    ? JSON.stringify(result)
+                    : String(result);
+                  sendChat(ws, `=> ${str}`);
+                } catch (e) {
+                  sendChat(ws, `ERROR: ${e.message.slice(0, 200)}`);
+                }
+                break;
+              }
+
+              case 'pos': {
+                sendChat(ws, `mouse at ${mouseX},${mouseY}`);
+                break;
+              }
+
+              case 'help': {
+                const topic = args[1]?.toLowerCase();
+                if (topic && HELP[topic]) {
+                  sendChat(ws, HELP[topic]);
+                } else {
+                  sendChat(ws, `commands: ${Object.keys(HELP).join(', ')}`);
+                }
+                break;
+              }
+
+              default:
+                sendChat(ws, `unknown command: ${cmd} — try !cd help`);
             }
+          }
+
+          function capitalize(s) {
+            return s.charAt(0).toUpperCase() + s.slice(1);
           }
 
           async function main() {
@@ -97,9 +205,10 @@ jobs:
               console.warn(`page load issue: ${e.message} — continuing anyway`);
             }
 
-            const ws = new WebSocket(wsUrl);
+            await page.mouse.move(mouseX, mouseY);
 
-            ws.on('open', () => sendChat(ws, `CDBot online — attached to: ${TARGET_URL}`));
+            const ws = new WebSocket(wsUrl);
+            ws.on('open', () => sendChat(ws, `CDBot online — ${TARGET_URL} — !cd help for commands`));
 
             ws.on('message', async (raw) => {
               let data;
@@ -107,11 +216,10 @@ jobs:
               if (data.kind !== 'chat') return;
               const msg = data.message || '';
               const nick = data.nickname || 'anon';
-              if (!msg.startsWith(COMMAND_PREFIX)) return;
-              const code = msg.slice(COMMAND_PREFIX.length).trim();
-              if (!code) return;
-              const result = await evalInBrowser(page, code);
-              sendChat(ws, `[${nick}] => ${result}`);
+              if (!msg.startsWith(PREFIX)) return;
+              const rest = msg.slice(PREFIX.length).trim();
+              if (!rest) return sendChat(ws, `!cd help for commands`);
+              await handleCommand(page, ws, nick, rest);
             });
 
             ws.on('close', () => { browser.close(); process.exit(0); });
