@@ -24,13 +24,25 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install puppeteer ws
+        run: |
+          sudo apt-get install -y xvfb ffmpeg
+          npm install puppeteer ws
 
       - name: Run OWOT Browser Bot
         env:
           TARGET_URL: ${{ github.event.inputs.target_url }}
           OWOT_WORLD: ${{ github.event.inputs.owot_world }}
+          TWITCH_STREAM_KEY: ${{ secrets.TWITCH_STREAM_KEY }}
+          DISPLAY: ':99'
         run: |
+          Xvfb :99 -screen 0 1280x720x24 &
+          sleep 1
+
+          ffmpeg -f x11grab -r 30 -s 1280x720 -i :99 \
+            -c:v libx264 -preset veryfast -maxrate 3000k -bufsize 6000k \
+            -pix_fmt yuv420p -g 60 -f flv \
+            rtmp://live.twitch.tv/app/$TWITCH_STREAM_KEY &
+
           node << 'EOF'
           const puppeteer = require('puppeteer');
           const WebSocket = require('ws');
@@ -67,10 +79,16 @@ jobs:
 
           async function main() {
             const browser = await puppeteer.launch({
-              args: ['--no-sandbox', '--disable-setuid-sandbox'],
-              headless: 'new'
+              headless: false,
+              args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--window-size=1280,720',
+                '--window-position=0,0'
+              ]
             });
             const page = await browser.newPage();
+            await page.setViewport({ width: 1280, height: 720 });
 
             try {
               await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 30000 });
