@@ -24,15 +24,18 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install @nut-tree-fork/nut-js ws
-
-      - name: Install ffmpeg
-        run: choco install ffmpeg -y
-
-      - name: Start stream
-        env:
-          TWITCH_STREAM_KEY: ${{ secrets.TWITCH_STREAM_KEY }}
         run: |
+          choco install ffmpeg googlechrome -y
+          npm install @nut-tree-fork/nut-js ws
+
+      - name: Run Bot
+        env:
+          TARGET_URL: ${{ github.event.inputs.target_url }}
+          OWOT_WORLD: ${{ github.event.inputs.owot_world }}
+          TWITCH_STREAM_KEY: ${{ secrets.TWITCH_STREAM_KEY }}
+        shell: powershell
+        run: |
+          # start ffmpeg stream
           Start-Process ffmpeg -ArgumentList @(
             '-f', 'gdigrab', '-framerate', '30', '-i', 'desktop',
             '-c:v', 'libx264', '-preset', 'veryfast',
@@ -40,20 +43,13 @@ jobs:
             '-pix_fmt', 'yuv420p', '-g', '60',
             '-f', 'flv', "rtmp://live.twitch.tv/app/$env:TWITCH_STREAM_KEY"
           ) -NoNewWindow
-        shell: powershell
 
-      - name: Open browser
-        env:
-          TARGET_URL: ${{ github.event.inputs.target_url }}
-        run: Start-Process "chrome.exe" -ArgumentList $env:TARGET_URL
-        shell: powershell
+          # open browser
+          Start-Process "chrome.exe" -ArgumentList $env:TARGET_URL
+          Start-Sleep -Seconds 2
 
-      - name: Run OWOT Bot
-        env:
-          TARGET_URL: ${{ github.event.inputs.target_url }}
-          OWOT_WORLD: ${{ github.event.inputs.owot_world }}
-        run: |
-          node << 'EOF'
+          # run bot inline
+          node -e @"
           const { mouse, keyboard, screen, Button, Key, straightTo, Point } = require('@nut-tree-fork/nut-js');
           const WebSocket = require('ws');
 
@@ -64,20 +60,20 @@ jobs:
           const NICKNAME = 'CDBot';
           const PREFIX = '!cd ';
           const wsUrl = OWOT_WORLD
-            ? `wss://ourworldoftext.com/${OWOT_WORLD}/ws/`
+            ? ``wss://ourworldoftext.com/`${OWOT_WORLD}/ws/``
             : 'wss://ourworldoftext.com/ws/';
 
           const HELP = {
             'mouse':  'mouse (up|down|left|right) (px)',
             'moveto': 'moveto (x) (y)',
             'click':  'click (left|right|middle)?',
-            'dclick': 'dclick — double click',
+            'dclick': 'dclick - double click',
             'scroll': 'scroll (up|down) (amt)',
             'type':   'type (text)',
             'key':    'key (ctrl+)?(shift+)?(alt+)?key',
-            'run':    'run (exe) — launch a program',
-            'pos':    'pos — current mouse position',
-            'size':   'size — screen dimensions',
+            'run':    'run (exe) - launch a program',
+            'pos':    'pos - current mouse position',
+            'size':   'size - screen dimensions',
             'help':   'help (command)?',
           };
 
@@ -88,11 +84,9 @@ jobs:
             win: Key.LeftSuper,
           };
 
-          // nut-js Key is a big enum, look up by name
           function resolveKey(name) {
             const k = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
             if (Key[k] !== undefined) return Key[k];
-            // try uppercase single char
             if (Key[name.toUpperCase()] !== undefined) return Key[name.toUpperCase()];
             return null;
           }
@@ -110,7 +104,6 @@ jobs:
           async function handleCommand(ws, nick, raw) {
             const args = raw.trim().split(/\s+/);
             const cmd = args[0]?.toLowerCase();
-
             try {
               switch (cmd) {
                 case 'mouse': {
@@ -123,55 +116,49 @@ jobs:
                     left:  new Point(pos.x - px, pos.y),
                     right: new Point(pos.x + px, pos.y),
                   };
-                  if (!deltas[dir]) return sendChat(ws, `unknown dir: ${dir}`);
+                  if (!deltas[dir]) return sendChat(ws, ``unknown dir: `${dir}``);
                   await mouse.move(straightTo(deltas[dir]));
                   const np = await mouse.getPosition();
-                  sendChat(ws, `mouse at ${np.x},${np.y}`);
+                  sendChat(ws, ``mouse at `${np.x},`${np.y}``);
                   break;
                 }
-
                 case 'moveto': {
                   const x = parseInt(args[1]);
                   const y = parseInt(args[2]);
                   if (isNaN(x) || isNaN(y)) return sendChat(ws, 'usage: moveto (x) (y)');
                   await mouse.move(straightTo(new Point(x, y)));
-                  sendChat(ws, `moved to ${x},${y}`);
+                  sendChat(ws, ``moved to `${x},`${y}``);
                   break;
                 }
-
                 case 'click': {
                   const btnMap = { left: Button.LEFT, right: Button.RIGHT, middle: Button.MIDDLE };
                   const btn = btnMap[args[1]?.toLowerCase()] ?? Button.LEFT;
                   await mouse.click(btn);
                   const pos = await mouse.getPosition();
-                  sendChat(ws, `clicked at ${pos.x},${pos.y}`);
+                  sendChat(ws, ``clicked at `${pos.x},`${pos.y}``);
                   break;
                 }
-
                 case 'dclick': {
                   await mouse.doubleClick(Button.LEFT);
-                  sendChat(ws, `double clicked`);
+                  sendChat(ws, 'double clicked');
                   break;
                 }
-
                 case 'scroll': {
                   const dir = args[1]?.toLowerCase();
                   const amt = parseInt(args[2]) || 3;
                   if (dir === 'up') await mouse.scrollUp(amt);
                   else if (dir === 'down') await mouse.scrollDown(amt);
                   else return sendChat(ws, 'usage: scroll (up|down) (amt)');
-                  sendChat(ws, `scrolled ${dir} ${amt}`);
+                  sendChat(ws, ``scrolled `${dir} `${amt}``);
                   break;
                 }
-
                 case 'type': {
                   const text = args.slice(1).join(' ');
                   if (!text) return sendChat(ws, 'usage: type (text)');
                   await keyboard.type(text);
-                  sendChat(ws, `typed: ${text.slice(0, 80)}`);
+                  sendChat(ws, ``typed: `${text.slice(0, 80)}``);
                   break;
                 }
-
                 case 'key': {
                   const combo = args[1];
                   if (!combo) return sendChat(ws, 'usage: key (ctrl+)?(shift+)?(alt+)?key');
@@ -179,55 +166,49 @@ jobs:
                   const keyName = parts[parts.length - 1];
                   const mods = parts.slice(0, -1).map(m => MOD_MAP[m]).filter(Boolean);
                   const mainKey = resolveKey(keyName);
-                  if (!mainKey) return sendChat(ws, `unknown key: ${keyName}`);
+                  if (!mainKey) return sendChat(ws, ``unknown key: `${keyName}``);
                   await keyboard.pressKey(...mods, mainKey);
                   await keyboard.releaseKey(...mods, mainKey);
-                  sendChat(ws, `pressed: ${combo}`);
+                  sendChat(ws, ``pressed: `${combo}``);
                   break;
                 }
-
                 case 'run': {
                   const exe = args.slice(1).join(' ');
                   if (!exe) return sendChat(ws, 'usage: run (exe)');
                   const { exec } = require('child_process');
-                  exec(`start "" "${exe}"`, (err) => {
-                    if (err) sendChat(ws, `run failed: ${err.message.slice(0, 200)}`);
-                    else sendChat(ws, `launched: ${exe}`);
+                  exec(``start "" "`${exe}"``, (err) => {
+                    if (err) sendChat(ws, ``run failed: `${err.message.slice(0, 200)}``);
+                    else sendChat(ws, ``launched: `${exe}``);
                   });
                   break;
                 }
-
                 case 'pos': {
                   const pos = await mouse.getPosition();
-                  sendChat(ws, `mouse at ${pos.x},${pos.y}`);
+                  sendChat(ws, ``mouse at `${pos.x},`${pos.y}``);
                   break;
                 }
-
                 case 'size': {
                   const w = await screen.width();
                   const h = await screen.height();
-                  sendChat(ws, `screen: ${w}x${h}`);
+                  sendChat(ws, ``screen: `${w}x`${h}``);
                   break;
                 }
-
                 case 'help': {
                   const topic = args[1]?.toLowerCase();
-                  sendChat(ws, topic && HELP[topic] ? HELP[topic] : `commands: ${Object.keys(HELP).join(', ')}`);
+                  sendChat(ws, topic && HELP[topic] ? HELP[topic] : ``commands: `${Object.keys(HELP).join(', ')}``);
                   break;
                 }
-
                 default:
-                  sendChat(ws, `unknown command: ${cmd} — try !cd help`);
+                  sendChat(ws, ``unknown command: `${cmd} - try !cd help``);
               }
             } catch (e) {
-              sendChat(ws, `error: ${e.message.slice(0, 200)}`);
+              sendChat(ws, ``error: `${e.message.slice(0, 200)}``);
             }
           }
 
           async function main() {
             const ws = new WebSocket(wsUrl);
-            ws.on('open', () => sendChat(ws, `CDBot online — !cd help for commands`));
-
+            ws.on('open', () => sendChat(ws, 'CDBot online - !cd help for commands'));
             ws.on('message', async (raw) => {
               let data;
               try { data = JSON.parse(raw.toString()); } catch { return; }
@@ -239,11 +220,9 @@ jobs:
               if (!rest) return sendChat(ws, '!cd help for commands');
               await handleCommand(ws, nick, rest);
             });
-
             ws.on('close', () => process.exit(0));
-            ws.on('error', (e) => console.error(`ws error: ${e.message}`));
+            ws.on('error', (e) => console.error(``ws error: `${e.message}``));
           }
 
           main().catch(e => { console.error(e); process.exit(1); });
-          EOF
-        shell: bash
+          "@
