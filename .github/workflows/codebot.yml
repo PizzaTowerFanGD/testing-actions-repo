@@ -3,10 +3,6 @@ name: OWOT Windows Desktop Bot
 on:
   workflow_dispatch:
     inputs:
-      target_url:
-        description: 'URL to open on startup'
-        required: true
-        default: 'https://example.com'
       owot_world:
         description: 'OWOT world name (leave empty for main world)'
         required: false
@@ -25,17 +21,20 @@ jobs:
 
       - name: Install dependencies
         run: |
-          choco install ffmpeg googlechrome -y
+          choco install ffmpeg -y
           npm install @nut-tree-fork/nut-js ws
 
       - name: Run Bot
         env:
-          TARGET_URL: ${{ github.event.inputs.target_url }}
           OWOT_WORLD: ${{ github.event.inputs.owot_world }}
           TWITCH_STREAM_KEY: ${{ secrets.TWITCH_STREAM_KEY }}
         shell: powershell
         run: |
-          # start ffmpeg stream
+          # minimize all windows
+          $shell = New-Object -ComObject Shell.Application
+          $shell.MinimizeAll()
+          Start-Sleep -Seconds 1
+
           Start-Process ffmpeg -ArgumentList @(
             '-f', 'gdigrab', '-framerate', '30', '-i', 'desktop',
             '-c:v', 'libx264', '-preset', 'veryfast',
@@ -44,11 +43,6 @@ jobs:
             '-f', 'flv', "rtmp://live.twitch.tv/app/$env:TWITCH_STREAM_KEY"
           ) -NoNewWindow
 
-          # open browser
-          Start-Process "chrome.exe" -ArgumentList $env:TARGET_URL
-          Start-Sleep -Seconds 2
-
-          # run bot inline
           node -e @"
           const { mouse, keyboard, screen, Button, Key, straightTo, Point } = require('@nut-tree-fork/nut-js');
           const WebSocket = require('ws');
@@ -71,9 +65,10 @@ jobs:
             'scroll': 'scroll (up|down) (amt)',
             'type':   'type (text)',
             'key':    'key (ctrl+)?(shift+)?(alt+)?key',
-            'run':    'run (exe) - launch a program',
+            'run':    'run (cmd command) - run a cmd command',
             'pos':    'pos - current mouse position',
             'size':   'size - screen dimensions',
+            'stream': 'stream - get the stream link',
             'help':   'help (command)?',
           };
 
@@ -173,12 +168,12 @@ jobs:
                   break;
                 }
                 case 'run': {
-                  const exe = args.slice(1).join(' ');
-                  if (!exe) return sendChat(ws, 'usage: run (exe)');
+                  const command = args.slice(1).join(' ');
+                  if (!command) return sendChat(ws, 'usage: run (cmd command)');
                   const { exec } = require('child_process');
-                  exec(``start "" "`${exe}"``, (err) => {
-                    if (err) sendChat(ws, ``run failed: `${err.message.slice(0, 200)}``);
-                    else sendChat(ws, ``launched: `${exe}``);
+                  exec(command, { shell: 'cmd.exe' }, (err, stdout, stderr) => {
+                    if (err) sendChat(ws, ``error: `${err.message.slice(0, 400)}``);
+                    else sendChat(ws, (stdout || stderr || 'done').slice(0, 440));
                   });
                   break;
                 }
@@ -191,6 +186,10 @@ jobs:
                   const w = await screen.width();
                   const h = await screen.height();
                   sendChat(ws, ``screen: `${w}x`${h}``);
+                  break;
+                }
+                case 'stream': {
+                  sendChat(ws, 'streaming at twitch.tv/gimmickcellar');
                   break;
                 }
                 case 'help': {
@@ -208,7 +207,7 @@ jobs:
 
           async function main() {
             const ws = new WebSocket(wsUrl);
-            ws.on('open', () => sendChat(ws, 'CDBot online - !cd help for commands'));
+            ws.on('open', () => sendChat(ws, 'CDBot online - !cd help for commands | streaming at twitch.tv/gimmickcellar'));
             ws.on('message', async (raw) => {
               let data;
               try { data = JSON.parse(raw.toString()); } catch { return; }
