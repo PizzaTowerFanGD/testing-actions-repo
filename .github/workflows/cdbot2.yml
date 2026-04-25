@@ -34,213 +34,258 @@ jobs:
           TWITCH_STREAM_KEY: ${{ secrets.TWITCH_STREAM_KEY }}
         shell: powershell
         run: |
-          # download and extract zip
           $zipPath = "$env:TEMP\app.zip"
           $extractPath = "$env:TEMP\app"
           Invoke-WebRequest -Uri $env:ZIP_URL -OutFile $zipPath
           Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
 
-          # find first exe
           $exe = Get-ChildItem -Path $extractPath -Filter "*.exe" -Recurse | Select-Object -First 1
           if (-not $exe) { Write-Error "no exe found in zip"; exit 1 }
           Write-Host "found exe: $($exe.FullName)"
 
-          # minimize all windows
           $shell = New-Object -ComObject Shell.Application
           $shell.MinimizeAll()
           Start-Sleep -Seconds 1
 
-          # launch app fullscreen
-          Start-Process $exe.FullName
-          Start-Sleep -Seconds 2
-
-          # maximize it
           Add-Type @"
             using System;
             using System.Runtime.InteropServices;
             public class WinApi {
               [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-              [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+              [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+              public struct RECT { public int Left, Top, Right, Bottom; }
             }
-"@
-          [WinApi]::ShowWindow([WinApi]::GetForegroundWindow(), 3) # 3 = maximize
+          "@
 
-          Start-Process ffmpeg -ArgumentList @(
-            '-f', 'gdigrab', '-framerate', '30', '-i', 'desktop',
+          $proc = Start-Process $exe.FullName -PassThru
+          Start-Sleep -Seconds 2
+          [WinApi]::ShowWindow($proc.MainWindowHandle, 3)
+          Start-Sleep -Seconds 1
+
+          $rect = New-Object WinApi+RECT
+          [WinApi]::GetWindowRect($proc.MainWindowHandle, [ref]$rect)
+          $w = $rect.Right - $rect.Left
+          $h = $rect.Bottom - $rect.Top
+          $x = $rect.Left
+          $y = $rect.Top
+          Write-Host "window: ${w}x${h} at ${x},${y}"
+
+          $ffmpegProc = Start-Process ffmpeg -ArgumentList @(
+            '-f', 'gdigrab', '-framerate', '30',
+            '-offset_x', "$x", '-offset_y', "$y",
+            '-video_size', "${w}x${h}",
+            '-i', 'desktop',
             '-c:v', 'libx264', '-preset', 'veryfast',
             '-maxrate', '3000k', '-bufsize', '6000k',
             '-pix_fmt', 'yuv420p', '-g', '60',
             '-f', 'flv', "rtmp://live.twitch.tv/app/$env:TWITCH_STREAM_KEY"
-          ) -NoNewWindow
+          ) -PassThru -NoNewWindow
 
-          node -e @"
-          const { mouse, keyboard, screen, Button, Key, straightTo, Point } = require('@nut-tree-fork/nut-js');
-          const WebSocket = require('ws');
-
-          mouse.config.mouseSpeed = 1500;
-          keyboard.config.autoDelayMs = 0;
-
-          const OWOT_WORLD = process.env.OWOT_WORLD || '';
-          const NICKNAME = 'CDBot';
-          const PREFIX = '!cd ';
-          const wsUrl = OWOT_WORLD
-            ? ``wss://ourworldoftext.com/`${OWOT_WORLD}/ws/``
-            : 'wss://ourworldoftext.com/ws/';
-
-          const HELP = {
-            'mouse':  'mouse (up|down|left|right) (px)',
-            'moveto': 'moveto (x) (y)',
-            'click':  'click (left|right|middle)?',
-            'dclick': 'dclick - double click',
-            'scroll': 'scroll (up|down) (amt)',
-            'type':   'type (text)',
-            'key':    'key (ctrl+)?(shift+)?(alt+)?key',
-            'pos':    'pos - current mouse position',
-            'size':   'size - screen dimensions',
-            'stream': 'stream - get the stream link',
-            'help':   'help (command)?',
-          };
-
-          const MOD_MAP = {
-            ctrl: Key.LeftControl,
-            shift: Key.LeftShift,
-            alt: Key.LeftAlt,
-            win: Key.LeftSuper,
-          };
-
-          function resolveKey(name) {
-            const k = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
-            if (Key[k] !== undefined) return Key[k];
-            if (Key[name.toUpperCase()] !== undefined) return Key[name.toUpperCase()];
-            return null;
-          }
-
-          function sendChat(ws, message) {
-            ws.send(JSON.stringify({
-              kind: 'chat',
-              nickname: NICKNAME,
-              message: message.slice(0, 440),
-              location: 'page',
-              color: '#ff9900'
-            }));
-          }
-
-          async function handleCommand(ws, nick, raw) {
-            const args = raw.trim().split(/\s+/);
-            const cmd = args[0]?.toLowerCase();
-            try {
-              switch (cmd) {
-                case 'mouse': {
-                  const dir = args[1]?.toLowerCase();
-                  const px = parseInt(args[2]) || 50;
-                  const pos = await mouse.getPosition();
-                  const deltas = {
-                    up:    new Point(pos.x, pos.y - px),
-                    down:  new Point(pos.x, pos.y + px),
-                    left:  new Point(pos.x - px, pos.y),
-                    right: new Point(pos.x + px, pos.y),
-                  };
-                  if (!deltas[dir]) return sendChat(ws, ``unknown dir: `${dir}``);
-                  await mouse.move(straightTo(deltas[dir]));
-                  const np = await mouse.getPosition();
-                  sendChat(ws, ``mouse at `${np.x},`${np.y}``);
-                  break;
-                }
-                case 'moveto': {
-                  const x = parseInt(args[1]);
-                  const y = parseInt(args[2]);
-                  if (isNaN(x) || isNaN(y)) return sendChat(ws, 'usage: moveto (x) (y)');
-                  await mouse.move(straightTo(new Point(x, y)));
-                  sendChat(ws, ``moved to `${x},`${y}``);
-                  break;
-                }
-                case 'click': {
-                  const btnMap = { left: Button.LEFT, right: Button.RIGHT, middle: Button.MIDDLE };
-                  const btn = btnMap[args[1]?.toLowerCase()] ?? Button.LEFT;
-                  await mouse.click(btn);
-                  const pos = await mouse.getPosition();
-                  sendChat(ws, ``clicked at `${pos.x},`${pos.y}``);
-                  break;
-                }
-                case 'dclick': {
-                  await mouse.doubleClick(Button.LEFT);
-                  sendChat(ws, 'double clicked');
-                  break;
-                }
-                case 'scroll': {
-                  const dir = args[1]?.toLowerCase();
-                  const amt = parseInt(args[2]) || 3;
-                  if (dir === 'up') await mouse.scrollUp(amt);
-                  else if (dir === 'down') await mouse.scrollDown(amt);
-                  else return sendChat(ws, 'usage: scroll (up|down) (amt)');
-                  sendChat(ws, ``scrolled `${dir} `${amt}``);
-                  break;
-                }
-                case 'type': {
-                  const text = args.slice(1).join(' ');
-                  if (!text) return sendChat(ws, 'usage: type (text)');
-                  await keyboard.type(text);
-                  sendChat(ws, ``typed: `${text.slice(0, 80)}``);
-                  break;
-                }
-                case 'key': {
-                  const combo = args[1];
-                  if (!combo) return sendChat(ws, 'usage: key (ctrl+)?(shift+)?(alt+)?key');
-                  const parts = combo.toLowerCase().split('+');
-                  const keyName = parts[parts.length - 1];
-                  const mods = parts.slice(0, -1).map(m => MOD_MAP[m]).filter(Boolean);
-                  const mainKey = resolveKey(keyName);
-                  if (!mainKey) return sendChat(ws, ``unknown key: `${keyName}``);
-                  await keyboard.pressKey(...mods, mainKey);
-                  await keyboard.releaseKey(...mods, mainKey);
-                  sendChat(ws, ``pressed: `${combo}``);
-                  break;
-                }
-                case 'pos': {
-                  const pos = await mouse.getPosition();
-                  sendChat(ws, ``mouse at `${pos.x},`${pos.y}``);
-                  break;
-                }
-                case 'size': {
-                  const w = await screen.width();
-                  const h = await screen.height();
-                  sendChat(ws, ``screen: `${w}x`${h}``);
-                  break;
-                }
-                case 'stream': {
-                  sendChat(ws, 'streaming at twitch.tv/gimmickcellar');
-                  break;
-                }
-                case 'help': {
-                  const topic = args[1]?.toLowerCase();
-                  sendChat(ws, topic && HELP[topic] ? HELP[topic] : ``commands: `${Object.keys(HELP).join(', ')}``);
-                  break;
-                }
-                default:
-                  sendChat(ws, ``unknown command: `${cmd} - try !cd help``);
+          $monitor = Start-Job -ScriptBlock {
+            param($hwnd, $streamKey, $ffmpegId)
+            Add-Type @"
+              using System;
+              using System.Runtime.InteropServices;
+              public class WinApi2 {
+                [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+                public struct RECT { public int Left, Top, Right, Bottom; }
               }
-            } catch (e) {
-              sendChat(ws, ``error: `${e.message.slice(0, 200)}``);
+            "@
+            $lw = 0; $lh = 0; $lx = 0; $ly = 0
+            while ($true) {
+              Start-Sleep -Seconds 2
+              $r = New-Object WinApi2+RECT
+              [WinApi2]::GetWindowRect([IntPtr]$hwnd, [ref]$r)
+              $w = $r.Right - $r.Left
+              $h = $r.Bottom - $r.Top
+              $x = $r.Left
+              $y = $r.Top
+              if ($w -ne $lw -or $h -ne $lh -or $x -ne $lx -or $y -ne $ly) {
+                $lw = $w; $lh = $h; $lx = $x; $ly = $y
+                Stop-Process -Id $ffmpegId -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 1
+                $ffmpegId = (Start-Process ffmpeg -ArgumentList @(
+                  '-f', 'gdigrab', '-framerate', '30',
+                  '-offset_x', "$x", '-offset_y', "$y",
+                  '-video_size', "${w}x${h}",
+                  '-i', 'desktop',
+                  '-c:v', 'libx264', '-preset', 'veryfast',
+                  '-maxrate', '3000k', '-bufsize', '6000k',
+                  '-pix_fmt', 'yuv420p', '-g', '60',
+                  '-f', 'flv', "rtmp://live.twitch.tv/app/$streamKey"
+                ) -PassThru -NoNewWindow).Id
+              }
             }
-          }
+          } -ArgumentList $proc.MainWindowHandle, $env:TWITCH_STREAM_KEY, $ffmpegProc.Id
 
-          async function main() {
-            const ws = new WebSocket(wsUrl);
-            ws.on('open', () => sendChat(ws, 'CDBot online - !cd help for commands | streaming at twitch.tv/gimmickcellar'));
-            ws.on('message', async (raw) => {
-              let data;
-              try { data = JSON.parse(raw.toString()); } catch { return; }
-              if (data.kind !== 'chat') return;
-              const msg = data.message || '';
-              const nick = data.nickname || 'anon';
-              if (!msg.startsWith(PREFIX)) return;
-              const rest = msg.slice(PREFIX.length).trim();
-              if (!rest) return sendChat(ws, '!cd help for commands');
-              await handleCommand(ws, nick, rest);
-            });
-            ws.on('close', () => process.exit(0));
-            ws.on('error', (e) => console.error(``ws error: `${e.message}``));
-          }
+          node -e @'
+            const { mouse, keyboard, screen, Button, Key, straightTo, Point } = require('@nut-tree-fork/nut-js');
+            const WebSocket = require('ws');
 
-          main().catch(e => { console.error(e); process.exit(1); });
-          "@
+            mouse.config.mouseSpeed = 1500;
+            keyboard.config.autoDelayMs = 0;
+
+            const OWOT_WORLD = process.env.OWOT_WORLD || '';
+            const NICKNAME = 'CDBot';
+            const PREFIX = '!cd ';
+            const wsUrl = OWOT_WORLD
+              ? `wss://ourworldoftext.com/${OWOT_WORLD}/ws/`
+              : 'wss://ourworldoftext.com/ws/';
+
+            const HELP = {
+              'mouse':  'mouse (up|down|left|right) (px)',
+              'moveto': 'moveto (x) (y)',
+              'click':  'click (left|right|middle)?',
+              'dclick': 'dclick - double click',
+              'scroll': 'scroll (up|down) (amt)',
+              'type':   'type (text)',
+              'key':    'key (ctrl+)?(shift+)?(alt+)?key',
+              'pos':    'pos - current mouse position',
+              'size':   'size - screen dimensions',
+              'stream': 'stream - get the stream link',
+              'help':   'help (command)?',
+            };
+
+            const MOD_MAP = {
+              ctrl: Key.LeftControl,
+              shift: Key.LeftShift,
+              alt: Key.LeftAlt,
+              win: Key.LeftSuper,
+            };
+
+            function resolveKey(name) {
+              const k = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+              if (Key[k] !== undefined) return Key[k];
+              if (Key[name.toUpperCase()] !== undefined) return Key[name.toUpperCase()];
+              return null;
+            }
+
+            function sendChat(ws, message) {
+              ws.send(JSON.stringify({
+                kind: 'chat',
+                nickname: NICKNAME,
+                message: message.slice(0, 440),
+                location: 'page',
+                color: '#ff9900'
+              }));
+            }
+
+            async function handleCommand(ws, nick, raw) {
+              const args = raw.trim().split(/\s+/);
+              const cmd = args[0]?.toLowerCase();
+              try {
+                switch (cmd) {
+                  case 'mouse': {
+                    const dir = args[1]?.toLowerCase();
+                    const px = parseInt(args[2]) || 50;
+                    const pos = await mouse.getPosition();
+                    const deltas = {
+                      up:    new Point(pos.x, pos.y - px),
+                      down:  new Point(pos.x, pos.y + px),
+                      left:  new Point(pos.x - px, pos.y),
+                      right: new Point(pos.x + px, pos.y),
+                    };
+                    if (!deltas[dir]) return sendChat(ws, `unknown dir: ${dir}`);
+                    await mouse.move(straightTo(deltas[dir]));
+                    const np = await mouse.getPosition();
+                    sendChat(ws, `mouse at ${np.x},${np.y}`);
+                    break;
+                  }
+                  case 'moveto': {
+                    const x = parseInt(args[1]);
+                    const y = parseInt(args[2]);
+                    if (isNaN(x) || isNaN(y)) return sendChat(ws, 'usage: moveto (x) (y)');
+                    await mouse.move(straightTo(new Point(x, y)));
+                    sendChat(ws, `moved to ${x},${y}`);
+                    break;
+                  }
+                  case 'click': {
+                    const btnMap = { left: Button.LEFT, right: Button.RIGHT, middle: Button.MIDDLE };
+                    const btn = btnMap[args[1]?.toLowerCase()] ?? Button.LEFT;
+                    await mouse.click(btn);
+                    const pos = await mouse.getPosition();
+                    sendChat(ws, `clicked at ${pos.x},${pos.y}`);
+                    break;
+                  }
+                  case 'dclick': {
+                    await mouse.doubleClick(Button.LEFT);
+                    sendChat(ws, 'double clicked');
+                    break;
+                  }
+                  case 'scroll': {
+                    const dir = args[1]?.toLowerCase();
+                    const amt = parseInt(args[2]) || 3;
+                    if (dir === 'up') await mouse.scrollUp(amt);
+                    else if (dir === 'down') await mouse.scrollDown(amt);
+                    else return sendChat(ws, 'usage: scroll (up|down) (amt)');
+                    sendChat(ws, `scrolled ${dir} ${amt}`);
+                    break;
+                  }
+                  case 'type': {
+                    const text = args.slice(1).join(' ');
+                    if (!text) return sendChat(ws, 'usage: type (text)');
+                    await keyboard.type(text);
+                    sendChat(ws, `typed: ${text.slice(0, 80)}`);
+                    break;
+                  }
+                  case 'key': {
+                    const combo = args[1];
+                    if (!combo) return sendChat(ws, 'usage: key (ctrl+)?(shift+)?(alt+)?key');
+                    const parts = combo.toLowerCase().split('+');
+                    const keyName = parts[parts.length - 1];
+                    const mods = parts.slice(0, -1).map(m => MOD_MAP[m]).filter(Boolean);
+                    const mainKey = resolveKey(keyName);
+                    if (!mainKey) return sendChat(ws, `unknown key: ${keyName}`);
+                    await keyboard.pressKey(...mods, mainKey);
+                    await keyboard.releaseKey(...mods, mainKey);
+                    sendChat(ws, `pressed: ${combo}`);
+                    break;
+                  }
+                  case 'pos': {
+                    const pos = await mouse.getPosition();
+                    sendChat(ws, `mouse at ${pos.x},${pos.y}`);
+                    break;
+                  }
+                  case 'size': {
+                    const w = await screen.width();
+                    const h = await screen.height();
+                    sendChat(ws, `screen: ${w}x${h}`);
+                    break;
+                  }
+                  case 'stream': {
+                    sendChat(ws, 'streaming at twitch.tv/gimmickcellar');
+                    break;
+                  }
+                  case 'help': {
+                    const topic = args[1]?.toLowerCase();
+                    sendChat(ws, topic && HELP[topic] ? HELP[topic] : `commands: ${Object.keys(HELP).join(', ')}`);
+                    break;
+                  }
+                  default:
+                    sendChat(ws, `unknown command: ${cmd} - try !cd help`);
+                }
+              } catch (e) {
+                sendChat(ws, `error: ${e.message.slice(0, 200)}`);
+              }
+            }
+
+            async function main() {
+              const ws = new WebSocket(wsUrl);
+              ws.on('open', () => sendChat(ws, 'CDBot online - !cd help for commands | streaming at twitch.tv/gimmickcellar'));
+              ws.on('message', async (raw) => {
+                let data;
+                try { data = JSON.parse(raw.toString()); } catch { return; }
+                if (data.kind !== 'chat') return;
+                const msg = data.message || '';
+                const nick = data.nickname || 'anon';
+                if (!msg.startsWith(PREFIX)) return;
+                const rest = msg.slice(PREFIX.length).trim();
+                if (!rest) return sendChat(ws, '!cd help for commands');
+                await handleCommand(ws, nick, rest);
+              });
+              ws.on('close', () => process.exit(0));
+              ws.on('error', (e) => console.error(`ws error: ${e.message}`));
+            }
+
+            main().catch(e => { console.error(e); process.exit(1); });
+          '@
