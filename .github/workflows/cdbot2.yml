@@ -47,15 +47,7 @@ jobs:
           $shell.MinimizeAll()
           Start-Sleep -Seconds 1
 
-          Add-Type @"
-            using System;
-            using System.Runtime.InteropServices;
-            public class WinApi {
-              [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-              [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
-              public struct RECT { public int Left, Top, Right, Bottom; }
-            }
-          "@
+          Add-Type -TypeDefinition "using System; using System.Runtime.InteropServices; public class WinApi { [DllImport(`"user32.dll`")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); [DllImport(`"user32.dll`")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect); public struct RECT { public int Left, Top, Right, Bottom; } }"
 
           $proc = Start-Process $exe.FullName -PassThru
           Start-Sleep -Seconds 2
@@ -83,14 +75,7 @@ jobs:
 
           $monitor = Start-Job -ScriptBlock {
             param($hwnd, $streamKey, $ffmpegId)
-            Add-Type @"
-              using System;
-              using System.Runtime.InteropServices;
-              public class WinApi2 {
-                [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
-                public struct RECT { public int Left, Top, Right, Bottom; }
-              }
-            "@
+            Add-Type -TypeDefinition "using System; using System.Runtime.InteropServices; public class WinApi2 { [DllImport(`"user32.dll`")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect); public struct RECT { public int Left, Top, Right, Bottom; } }"
             $lw = 0; $lh = 0; $lx = 0; $ly = 0
             while ($true) {
               Start-Sleep -Seconds 2
@@ -118,174 +103,7 @@ jobs:
             }
           } -ArgumentList $proc.MainWindowHandle, $env:TWITCH_STREAM_KEY, $ffmpegProc.Id
 
-          node -e @'
-            const { mouse, keyboard, screen, Button, Key, straightTo, Point } = require('@nut-tree-fork/nut-js');
-            const WebSocket = require('ws');
-
-            mouse.config.mouseSpeed = 1500;
-            keyboard.config.autoDelayMs = 0;
-
-            const OWOT_WORLD = process.env.OWOT_WORLD || '';
-            const NICKNAME = 'CDBot';
-            const PREFIX = '!cd ';
-            const wsUrl = OWOT_WORLD
-              ? `wss://ourworldoftext.com/${OWOT_WORLD}/ws/`
-              : 'wss://ourworldoftext.com/ws/';
-
-            const HELP = {
-              'mouse':  'mouse (up|down|left|right) (px)',
-              'moveto': 'moveto (x) (y)',
-              'click':  'click (left|right|middle)?',
-              'dclick': 'dclick - double click',
-              'scroll': 'scroll (up|down) (amt)',
-              'type':   'type (text)',
-              'key':    'key (ctrl+)?(shift+)?(alt+)?key',
-              'pos':    'pos - current mouse position',
-              'size':   'size - screen dimensions',
-              'stream': 'stream - get the stream link',
-              'help':   'help (command)?',
-            };
-
-            const MOD_MAP = {
-              ctrl: Key.LeftControl,
-              shift: Key.LeftShift,
-              alt: Key.LeftAlt,
-              win: Key.LeftSuper,
-            };
-
-            function resolveKey(name) {
-              const k = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
-              if (Key[k] !== undefined) return Key[k];
-              if (Key[name.toUpperCase()] !== undefined) return Key[name.toUpperCase()];
-              return null;
-            }
-
-            function sendChat(ws, message) {
-              ws.send(JSON.stringify({
-                kind: 'chat',
-                nickname: NICKNAME,
-                message: message.slice(0, 440),
-                location: 'page',
-                color: '#ff9900'
-              }));
-            }
-
-            async function handleCommand(ws, nick, raw) {
-              const args = raw.trim().split(/\s+/);
-              const cmd = args[0]?.toLowerCase();
-              try {
-                switch (cmd) {
-                  case 'mouse': {
-                    const dir = args[1]?.toLowerCase();
-                    const px = parseInt(args[2]) || 50;
-                    const pos = await mouse.getPosition();
-                    const deltas = {
-                      up:    new Point(pos.x, pos.y - px),
-                      down:  new Point(pos.x, pos.y + px),
-                      left:  new Point(pos.x - px, pos.y),
-                      right: new Point(pos.x + px, pos.y),
-                    };
-                    if (!deltas[dir]) return sendChat(ws, `unknown dir: ${dir}`);
-                    await mouse.move(straightTo(deltas[dir]));
-                    const np = await mouse.getPosition();
-                    sendChat(ws, `mouse at ${np.x},${np.y}`);
-                    break;
-                  }
-                  case 'moveto': {
-                    const x = parseInt(args[1]);
-                    const y = parseInt(args[2]);
-                    if (isNaN(x) || isNaN(y)) return sendChat(ws, 'usage: moveto (x) (y)');
-                    await mouse.move(straightTo(new Point(x, y)));
-                    sendChat(ws, `moved to ${x},${y}`);
-                    break;
-                  }
-                  case 'click': {
-                    const btnMap = { left: Button.LEFT, right: Button.RIGHT, middle: Button.MIDDLE };
-                    const btn = btnMap[args[1]?.toLowerCase()] ?? Button.LEFT;
-                    await mouse.click(btn);
-                    const pos = await mouse.getPosition();
-                    sendChat(ws, `clicked at ${pos.x},${pos.y}`);
-                    break;
-                  }
-                  case 'dclick': {
-                    await mouse.doubleClick(Button.LEFT);
-                    sendChat(ws, 'double clicked');
-                    break;
-                  }
-                  case 'scroll': {
-                    const dir = args[1]?.toLowerCase();
-                    const amt = parseInt(args[2]) || 3;
-                    if (dir === 'up') await mouse.scrollUp(amt);
-                    else if (dir === 'down') await mouse.scrollDown(amt);
-                    else return sendChat(ws, 'usage: scroll (up|down) (amt)');
-                    sendChat(ws, `scrolled ${dir} ${amt}`);
-                    break;
-                  }
-                  case 'type': {
-                    const text = args.slice(1).join(' ');
-                    if (!text) return sendChat(ws, 'usage: type (text)');
-                    await keyboard.type(text);
-                    sendChat(ws, `typed: ${text.slice(0, 80)}`);
-                    break;
-                  }
-                  case 'key': {
-                    const combo = args[1];
-                    if (!combo) return sendChat(ws, 'usage: key (ctrl+)?(shift+)?(alt+)?key');
-                    const parts = combo.toLowerCase().split('+');
-                    const keyName = parts[parts.length - 1];
-                    const mods = parts.slice(0, -1).map(m => MOD_MAP[m]).filter(Boolean);
-                    const mainKey = resolveKey(keyName);
-                    if (!mainKey) return sendChat(ws, `unknown key: ${keyName}`);
-                    await keyboard.pressKey(...mods, mainKey);
-                    await keyboard.releaseKey(...mods, mainKey);
-                    sendChat(ws, `pressed: ${combo}`);
-                    break;
-                  }
-                  case 'pos': {
-                    const pos = await mouse.getPosition();
-                    sendChat(ws, `mouse at ${pos.x},${pos.y}`);
-                    break;
-                  }
-                  case 'size': {
-                    const w = await screen.width();
-                    const h = await screen.height();
-                    sendChat(ws, `screen: ${w}x${h}`);
-                    break;
-                  }
-                  case 'stream': {
-                    sendChat(ws, 'streaming at twitch.tv/gimmickcellar');
-                    break;
-                  }
-                  case 'help': {
-                    const topic = args[1]?.toLowerCase();
-                    sendChat(ws, topic && HELP[topic] ? HELP[topic] : `commands: ${Object.keys(HELP).join(', ')}`);
-                    break;
-                  }
-                  default:
-                    sendChat(ws, `unknown command: ${cmd} - try !cd help`);
-                }
-              } catch (e) {
-                sendChat(ws, `error: ${e.message.slice(0, 200)}`);
-              }
-            }
-
-            async function main() {
-              const ws = new WebSocket(wsUrl);
-              ws.on('open', () => sendChat(ws, 'CDBot online - !cd help for commands | streaming at twitch.tv/gimmickcellar'));
-              ws.on('message', async (raw) => {
-                let data;
-                try { data = JSON.parse(raw.toString()); } catch { return; }
-                if (data.kind !== 'chat') return;
-                const msg = data.message || '';
-                const nick = data.nickname || 'anon';
-                if (!msg.startsWith(PREFIX)) return;
-                const rest = msg.slice(PREFIX.length).trim();
-                if (!rest) return sendChat(ws, '!cd help for commands');
-                await handleCommand(ws, nick, rest);
-              });
-              ws.on('close', () => process.exit(0));
-              ws.on('error', (e) => console.error(`ws error: ${e.message}`));
-            }
-
-            main().catch(e => { console.error(e); process.exit(1); });
-          '@
+          $botJs = "$env:TEMP\bot.js"
+          $b64 = "Y29uc3QgeyBtb3VzZSwga2V5Ym9hcmQsIHNjcmVlbiwgQnV0dG9uLCBLZXksIHN0cmFpZ2h0VG8sIFBvaW50IH0gPSByZXF1aXJlKCdAbnV0LXRyZWUtZm9yay9udXQtanMnKTsKY29uc3QgV2ViU29ja2V0ID0gcmVxdWlyZSgnd3MnKTsKCm1vdXNlLmNvbmZpZy5tb3VzZVNwZWVkID0gMTUwMDsKa2V5Ym9hcmQuY29uZmlnLmF1dG9EZWxheU1zID0gMDsKCmNvbnN0IE9XT1RfV09STEQgPSBwcm9jZXNzLmVudi5PV09UX1dPUkxEIHx8ICcnOwpjb25zdCBOSUNLTkFNRSA9ICdDREJvdCc7CmNvbnN0IFBSRUZJWCA9ICchY2QgJzsKY29uc3Qgd3NVcmwgPSBPV09UX1dPUkxECiAgPyBgd3NzOi8vb3Vyd29ybGRvZnRleHQuY29tLyR7T1dPVF9XT1JMRH0vd3MvYAogIDogJ3dzczovL291cndvcmxkb2Z0ZXh0LmNvbS93cy8nOwoKY29uc3QgSEVMUCA9IHsKICAnbW91c2UnOiAgJ21vdXNlICh1cHxkb3dufGxlZnR8cmlnaHQpIChweCknLAogICdtb3ZldG8nOiAnbW92ZXRvICh4KSAoeSknLAogICdjbGljayc6ICAnY2xpY2sgKGxlZnR8cmlnaHR8bWlkZGxlKT8nLAogICdkY2xpY2snOiAnZGNsaWNrIC0gZG91YmxlIGNsaWNrJywKICAnc2Nyb2xsJzogJ3Njcm9sbCAodXB8ZG93bikgKGFtdCknLAogICd0eXBlJzogICAndHlwZSAodGV4dCknLAogICdrZXknOiAgICAna2V5IChjdHJsKyk/KHNoaWZ0Kyk/KGFsdCspP2tleScsCiAgJ3Bvcyc6ICAgICdwb3MgLSBjdXJyZW50IG1vdXNlIHBvc2l0aW9uJywKICAnc2l6ZSc6ICAgJ3NpemUgLSBzY3JlZW4gZGltZW5zaW9ucycsCiAgJ3N0cmVhbSc6ICdzdHJlYW0gLSBnZXQgdGhlIHN0cmVhbSBsaW5rJywKICAnaGVscCc6ICAgJ2hlbHAgKGNvbW1hbmQpPycsCn07Cgpjb25zdCBNT0RfTUFQID0gewogIGN0cmw6IEtleS5MZWZ0Q29udHJvbCwKICBzaGlmdDogS2V5LkxlZnRTaGlmdCwKICBhbHQ6IEtleS5MZWZ0QWx0LAogIHdpbjogS2V5LkxlZnRTdXBlciwKfTsKCmZ1bmN0aW9uIHJlc29sdmVLZXkobmFtZSkgewogIGNvbnN0IGsgPSBuYW1lLmNoYXJBdCgwKS50b1VwcGVyQ2FzZSgpICsgbmFtZS5zbGljZSgxKS50b0xvd2VyQ2FzZSgpOwogIGlmIChLZXlba10gIT09IHVuZGVmaW5lZCkgcmV0dXJuIEtleVtrXTsKICBpZiAoS2V5W25hbWUudG9VcHBlckNhc2UoKV0gIT09IHVuZGVmaW5lZCkgcmV0dXJuIEtleVtuYW1lLnRvVXBwZXJDYXNlKCldOwogIHJldHVybiBudWxsOwp9CgpmdW5jdGlvbiBzZW5kQ2hhdCh3cywgbWVzc2FnZSkgewogIHdzLnNlbmQoSlNPTi5zdHJpbmdpZnkoewogICAga2luZDogJ2NoYXQnLAogICAgbmlja25hbWU6IE5JQ0tOQU1FLAogICAgbWVzc2FnZTogbWVzc2FnZS5zbGljZSgwLCA0NDApLAogICAgbG9jYXRpb246ICdwYWdlJywKICAgIGNvbG9yOiAnI2ZmOTkwMCcKICB9KSk7Cn0KCmFzeW5jIGZ1bmN0aW9uIGhhbmRsZUNvbW1hbmQod3MsIG5pY2ssIHJhdykgewogIGNvbnN0IGFyZ3MgPSByYXcudHJpbSgpLnNwbGl0KC9ccysvKTsKICBjb25zdCBjbWQgPSBhcmdzWzBdPy50b0xvd2VyQ2FzZSgpOwogIHRyeSB7CiAgICBzd2l0Y2ggKGNtZCkgewogICAgICBjYXNlICdtb3VzZSc6IHsKICAgICAgICBjb25zdCBkaXIgPSBhcmdzWzFdPy50b0xvd2VyQ2FzZSgpOwogICAgICAgIGNvbnN0IHB4ID0gcGFyc2VJbnQoYXJnc1syXSkgfHwgNTA7CiAgICAgICAgY29uc3QgcG9zID0gYXdhaXQgbW91c2UuZ2V0UG9zaXRpb24oKTsKICAgICAgICBjb25zdCBkZWx0YXMgPSB7CiAgICAgICAgICB1cDogICAgbmV3IFBvaW50KHBvcy54LCBwb3MueSAtIHB4KSwKICAgICAgICAgIGRvd246ICBuZXcgUG9pbnQocG9zLngsIHBvcy55ICsgcHgpLAogICAgICAgICAgbGVmdDogIG5ldyBQb2ludChwb3MueCAtIHB4LCBwb3MueSksCiAgICAgICAgICByaWdodDogbmV3IFBvaW50KHBvcy54ICsgcHgsIHBvcy55KSwKICAgICAgICB9OwogICAgICAgIGlmICghZGVsdGFzW2Rpcl0pIHJldHVybiBzZW5kQ2hhdCh3cywgYHVua25vd24gZGlyOiAke2Rpcn1gKTsKICAgICAgICBhd2FpdCBtb3VzZS5tb3ZlKHN0cmFpZ2h0VG8oZGVsdGFzW2Rpcl0pKTsKICAgICAgICBjb25zdCBucCA9IGF3YWl0IG1vdXNlLmdldFBvc2l0aW9uKCk7CiAgICAgICAgc2VuZENoYXQod3MsIGBtb3VzZSBhdCAke25wLnh9LCR7bnAueX1gKTsKICAgICAgICBicmVhazsKICAgICAgfQogICAgICBjYXNlICdtb3ZldG8nOiB7CiAgICAgICAgY29uc3QgeCA9IHBhcnNlSW50KGFyZ3NbMV0pOwogICAgICAgIGNvbnN0IHkgPSBwYXJzZUludChhcmdzWzJdKTsKICAgICAgICBpZiAoaXNOYU4oeCkgfHwgaXNOYU4oeSkpIHJldHVybiBzZW5kQ2hhdCh3cywgJ3VzYWdlOiBtb3ZldG8gKHgpICh5KScpOwogICAgICAgIGF3YWl0IG1vdXNlLm1vdmUoc3RyYWlnaHRUbyhuZXcgUG9pbnQoeCwgeSkpKTsKICAgICAgICBzZW5kQ2hhdCh3cywgYG1vdmVkIHRvICR7eH0sJHt5fWApOwogICAgICAgIGJyZWFrOwogICAgICB9CiAgICAgIGNhc2UgJ2NsaWNrJzogewogICAgICAgIGNvbnN0IGJ0bk1hcCA9IHsgbGVmdDogQnV0dG9uLkxFRlQsIHJpZ2h0OiBCdXR0b24uUklHSFQsIG1pZGRsZTogQnV0dG9uLk1JRERMRSB9OwogICAgICAgIGNvbnN0IGJ0biA9IGJ0bk1hcFthcmdzWzFdPy50b0xvd2VyQ2FzZSgpXSA/PyBCdXR0b24uTEVGVDsKICAgICAgICBhd2FpdCBtb3VzZS5jbGljayhidG4pOwogICAgICAgIGNvbnN0IHBvcyA9IGF3YWl0IG1vdXNlLmdldFBvc2l0aW9uKCk7CiAgICAgICAgc2VuZENoYXQod3MsIGBjbGlja2VkIGF0ICR7cG9zLnh9LCR7cG9zLnl9YCk7CiAgICAgICAgYnJlYWs7CiAgICAgIH0KICAgICAgY2FzZSAnZGNsaWNrJzogewogICAgICAgIGF3YWl0IG1vdXNlLmRvdWJsZUNsaWNrKEJ1dHRvbi5MRUZUKTsKICAgICAgICBzZW5kQ2hhdCh3cywgJ2RvdWJsZSBjbGlja2VkJyk7CiAgICAgICAgYnJlYWs7CiAgICAgIH0KICAgICAgY2FzZSAnc2Nyb2xsJzogewogICAgICAgIGNvbnN0IGRpciA9IGFyZ3NbMV0/LnRvTG93ZXJDYXNlKCk7CiAgICAgICAgY29uc3QgYW10ID0gcGFyc2VJbnQoYXJnc1syXSkgfHwgMzsKICAgICAgICBpZiAoZGlyID09PSAndXAnKSBhd2FpdCBtb3VzZS5zY3JvbGxVcChhbXQpOwogICAgICAgIGVsc2UgaWYgKGRpciA9PT0gJ2Rvd24nKSBhd2FpdCBtb3VzZS5zY3JvbGxEb3duKGFtdCk7CiAgICAgICAgZWxzZSByZXR1cm4gc2VuZENoYXQod3MsICd1c2FnZTogc2Nyb2xsICh1cHxkb3duKSAoYW10KScpOwogICAgICAgIHNlbmRDaGF0KHdzLCBgc2Nyb2xsZWQgJHtkaXJ9ICR7YW10fWApOwogICAgICAgIGJyZWFrOwogICAgICB9CiAgICAgIGNhc2UgJ3R5cGUnOiB7CiAgICAgICAgY29uc3QgdGV4dCA9IGFyZ3Muc2xpY2UoMSkuam9pbignICcpOwogICAgICAgIGlmICghdGV4dCkgcmV0dXJuIHNlbmRDaGF0KHdzLCAndXNhZ2U6IHR5cGUgKHRleHQpJyk7CiAgICAgICAgYXdhaXQga2V5Ym9hcmQudHlwZSh0ZXh0KTsKICAgICAgICBzZW5kQ2hhdCh3cywgYHR5cGVkOiAke3RleHQuc2xpY2UoMCwgODApfWApOwogICAgICAgIGJyZWFrOwogICAgICB9CiAgICAgIGNhc2UgJ2tleSc6IHsKICAgICAgICBjb25zdCBjb21ibyA9IGFyZ3NbMV07CiAgICAgICAgaWYgKCFjb21ibykgcmV0dXJuIHNlbmRDaGF0KHdzLCAndXNhZ2U6IGtleSAoY3RybCspPyhzaGlmdCspPyhhbHQrKT9rZXknKTsKICAgICAgICBjb25zdCBwYXJ0cyA9IGNvbWJvLnRvTG93ZXJDYXNlKCkuc3BsaXQoJysnKTsKICAgICAgICBjb25zdCBrZXlOYW1lID0gcGFydHNbcGFydHMubGVuZ3RoIC0gMV07CiAgICAgICAgY29uc3QgbW9kcyA9IHBhcnRzLnNsaWNlKDAsIC0xKS5tYXAobSA9PiBNT0RfTUFQW21dKS5maWx0ZXIoQm9vbGVhbik7CiAgICAgICAgY29uc3QgbWFpbktleSA9IHJlc29sdmVLZXkoa2V5TmFtZSk7CiAgICAgICAgaWYgKCFtYWluS2V5KSByZXR1cm4gc2VuZENoYXQod3MsIGB1bmtub3duIGtleTogJHtrZXlOYW1lfWApOwogICAgICAgIGF3YWl0IGtleWJvYXJkLnByZXNzS2V5KC4uLm1vZHMsIG1haW5LZXkpOwogICAgICAgIGF3YWl0IGtleWJvYXJkLnJlbGVhc2VLZXkoLi4ubW9kcywgbWFpbktleSk7CiAgICAgICAgc2VuZENoYXQod3MsIGBwcmVzc2VkOiAke2NvbWJvfWApOwogICAgICAgIGJyZWFrOwogICAgICB9CiAgICAgIGNhc2UgJ3Bvcyc6IHsKICAgICAgICBjb25zdCBwb3MgPSBhd2FpdCBtb3VzZS5nZXRQb3NpdGlvbigpOwogICAgICAgIHNlbmRDaGF0KHdzLCBgbW91c2UgYXQgJHtwb3MueH0sJHtwb3MueX1gKTsKICAgICAgICBicmVhazsKICAgICAgfQogICAgICBjYXNlICdzaXplJzogewogICAgICAgIGNvbnN0IHcgPSBhd2FpdCBzY3JlZW4ud2lkdGgoKTsKICAgICAgICBjb25zdCBoID0gYXdhaXQgc2NyZWVuLmhlaWdodCgpOwogICAgICAgIHNlbmRDaGF0KHdzLCBgc2NyZWVuOiAke3d9eCR7aH1gKTsKICAgICAgICBicmVhazsKICAgICAgfQogICAgICBjYXNlICdzdHJlYW0nOiB7CiAgICAgICAgc2VuZENoYXQod3MsICdzdHJlYW1pbmcgYXQgdHdpdGNoLnR2L2dpbW1pY2tjZWxsYXInKTsKICAgICAgICBicmVhazsKICAgICAgfQogICAgICBjYXNlICdoZWxwJzogewogICAgICAgIGNvbnN0IHRvcGljID0gYXJnc1sxXT8udG9Mb3dlckNhc2UoKTsKICAgICAgICBzZW5kQ2hhdCh3cywgdG9waWMgJiYgSEVMUFt0b3BpY10gPyBIRUxQW3RvcGljXSA6IGBjb21tYW5kczogJHtPYmplY3Qua2V5cyhIRUxQKS5qb2luKCcsICcpfWApOwogICAgICAgIGJyZWFrOwogICAgICB9CiAgICAgIGRlZmF1bHQ6CiAgICAgICAgc2VuZENoYXQod3MsIGB1bmtub3duIGNvbW1hbmQ6ICR7Y21kfSAtIHRyeSAhY2QgaGVscGApOwogICAgfQogIH0gY2F0Y2ggKGUpIHsKICAgIHNlbmRDaGF0KHdzLCBgZXJyb3I6ICR7ZS5tZXNzYWdlLnNsaWNlKDAsIDIwMCl9YCk7CiAgfQp9Cgphc3luYyBmdW5jdGlvbiBtYWluKCkgewogIGNvbnN0IHdzID0gbmV3IFdlYlNvY2tldCh3c1VybCk7CiAgd3Mub24oJ29wZW4nLCAoKSA9PiBzZW5kQ2hhdCh3cywgJ0NEQm90IG9ubGluZSAtICFjZCBoZWxwIGZvciBjb21tYW5kcyB8IHN0cmVhbWluZyBhdCB0d2l0Y2gudHYvZ2ltbWlja2NlbGxhcicpKTsKICB3cy5vbignbWVzc2FnZScsIGFzeW5jIChyYXcpID0+IHsKICAgIGxldCBkYXRhOwogICAgdHJ5IHsgZGF0YSA9IEpTT04ucGFyc2UocmF3LnRvU3RyaW5nKCkpOyB9IGNhdGNoIHsgcmV0dXJuOyB9CiAgICBpZiAoZGF0YS5raW5kICE9PSAnY2hhdCcpIHJldHVybjsKICAgIGNvbnN0IG1zZyA9IGRhdGEubWVzc2FnZSB8fCAnJzsKICAgIGNvbnN0IG5pY2sgPSBkYXRhLm5pY2tuYW1lIHx8ICdhbm9uJzsKICAgIGlmICghbXNnLnN0YXJ0c1dpdGgoUFJFRklYKSkgcmV0dXJuOwogICAgY29uc3QgcmVzdCA9IG1zZy5zbGljZShQUkVGSVgubGVuZ3RoKS50cmltKCk7CiAgICBpZiAoIXJlc3QpIHJldHVybiBzZW5kQ2hhdCh3cywgJyFjZCBoZWxwIGZvciBjb21tYW5kcycpOwogICAgYXdhaXQgaGFuZGxlQ29tbWFuZCh3cywgbmljaywgcmVzdCk7CiAgfSk7CiAgd3Mub24oJ2Nsb3NlJywgKCkgPT4gcHJvY2Vzcy5leGl0KDApKTsKICB3cy5vbignZXJyb3InLCAoZSkgPT4gY29uc29sZS5lcnJvcihgd3MgZXJyb3I6ICR7ZS5tZXNzYWdlfWApKTsKfQoKbWFpbigpLmNhdGNoKGUgPT4geyBjb25zb2xlLmVycm9yKGUpOyBwcm9jZXNzLmV4aXQoMSk7IH0pOwo="
+          [System.IO.File]::WriteAllBytes($botJs, [System.Convert]::FromBase64String($b64))
+          node $botJs
