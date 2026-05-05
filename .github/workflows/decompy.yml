@@ -1,0 +1,26 @@
+name: decompile
+on:
+  workflow_dispatch:
+    inputs:
+      dll_url:
+        description: 'url to dll'
+        required: true
+
+jobs:
+  decompile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: install ilspycmd
+        run: dotnet tool install -g ilspycmd
+        
+      - name: fetch dll
+        run: wget "${{ github.event.inputs.dll_url }}" -O target.dll
+        
+      - name: decompile
+        run: ~/.dotnet/tools/ilspycmd target.dll -o ./decompiled
+        
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: decompiled-source
+          path: ./decompiled
