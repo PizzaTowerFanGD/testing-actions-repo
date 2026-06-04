@@ -137,9 +137,9 @@ jobs:
           fi
 
           if [[ "${VERSION}" == 4.* ]]; then
-            ./godot.x86_64 --headless --path target_project --export-release "Android" build/android/project.apk
+            ./godot.x86_64 --headless --path target_project --export-debug "Android" target_project/build/android/project.apk
           else
-            ./godot.x86_64 --no-window --path target_project --export-release "Android" build/android/project.apk
+            ./godot.x86_64 --no-window --path target_project --export-debug "Android" target_project/build/android/project.apk
           fi
 
       - name: Upload Artifact
